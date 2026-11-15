@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Check,
+  AlertTriangle,
+  CalendarCheck,
+  CalendarClock,
   CheckCircle2,
-  Copy,
   DollarSign,
   FileText,
   Lock,
+  LogIn,
   Moon,
-  Plus,
   RefreshCw,
-  Search,
   Sun,
   Users,
   X,
@@ -18,42 +18,40 @@ import { AccountReportModal } from './components/AccountReportModal';
 import { ChaletCard } from './components/ChaletCard';
 import { ChaletModal } from './components/ChaletModal';
 import { CheckoutModal } from './components/CheckoutModal';
+import { CloseDayModal, CloseDayPayload } from './components/CloseDayModal';
 import { GuestsModal } from './components/GuestsModal';
-import { KpiSummary } from './components/KpiSummary';
 import { RatesModal } from './components/RatesModal';
+import { ReservationsModal } from './components/ReservationsModal';
 import {
   calculateChaletTotals,
   createInitialChalets,
   DEFAULT_CATEGORY_RATES,
-  formatCurrencyBRL,
 } from './data/initialChalets';
 import { createInitialGuests } from './data/initialGuests';
+import { createInitialReservations } from './data/initialReservations';
 import {
-  CategoryFilter,
   CategoryRates,
   Chalet,
-  ChaletCategory,
   ChaletStatus,
   CheckoutRecord,
+  DailyClosingRecord,
   Guest,
+  Reservation,
+  ReservationStatus,
   StatusFilter,
 } from './types/chalet';
+import { addDaysYMD, getLocalTodayYMD } from './utils/validation';
 
 const STORAGE_KEY = 'pve_chalets_v1';
 const RATES_STORAGE_KEY = 'pve_rates_v1';
 const CHECKOUTS_STORAGE_KEY = 'pve_checkouts_v1';
 const GUESTS_STORAGE_KEY = 'pve_guests_v1';
+const RESERVATIONS_STORAGE_KEY = 'pve_reservations_v1';
+const BUSINESS_DATE_STORAGE_KEY = 'pve_business_date_v1';
+const DAY_CLOSINGS_STORAGE_KEY = 'pve_day_closings_v1';
 const THEME_STORAGE_KEY = 'pve_theme_v1';
 
 type ThemeMode = 'light' | 'dark';
-
-const CATEGORY_TABS: Array<{ key: CategoryFilter; label: string }> = [
-  { key: 'Todos', label: 'Todas' },
-  { key: ChaletCategory.STAND, label: 'Stand' },
-  { key: ChaletCategory.ERMITAO, label: 'Ermitão' },
-  { key: ChaletCategory.HIDRO, label: 'Hidro' },
-  { key: ChaletCategory.CASA, label: 'Casa' },
-];
 
 const STATUS_FILTERS: Array<{
   key: StatusFilter;
@@ -82,7 +80,9 @@ const STATUS_FILTERS: Array<{
   },
 ];
 
-function formatDateHeading(date: Date): string {
+function formatDateHeadingFromYMD(ymd: string): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const date = y && m && d ? new Date(y, m - 1, d, 12, 0, 0) : new Date();
   const formatted = new Intl.DateTimeFormat('pt-BR', {
     weekday: 'long',
     day: 'numeric',
@@ -90,6 +90,12 @@ function formatDateHeading(date: Date): string {
     year: 'numeric',
   }).format(date);
   return formatted.charAt(0).toUpperCase() + formatted.slice(1);
+}
+
+function formatDateShortBR(ymd: string): string {
+  const [y, m, d] = ymd.split('-');
+  if (!y || !m || !d) return ymd;
+  return `${d}/${m}/${y.slice(2)}`;
 }
 
 function formatTime(date: Date): string {
@@ -170,17 +176,59 @@ export default function App() {
     return createInitialGuests();
   });
 
-  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('Todos');
+  const [reservations, setReservations] = useState<Reservation[]>(() => {
+    try {
+      const saved = localStorage.getItem(RESERVATIONS_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as Reservation[];
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // Fallback to initial reservations
+    }
+    return createInitialReservations();
+  });
+
+  const [businessDate, setBusinessDate] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(BUSINESS_DATE_STORAGE_KEY);
+      if (saved && /^\d{4}-\d{2}-\d{2}$/.test(saved)) {
+        return saved;
+      }
+    } catch {
+      // Fallback to today's local date
+    }
+    return getLocalTodayYMD();
+  });
+
+  const [dayClosings, setDayClosings] = useState<DailyClosingRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem(DAY_CLOSINGS_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as DailyClosingRecord[];
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // Fallback to empty history
+    }
+    return [];
+  });
+
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('Todos');
-  const [searchQuery, setSearchQuery] = useState('');
   const [editingChalet, setEditingChalet] = useState<Chalet | null>(null);
   const [checkoutChalet, setCheckoutChalet] = useState<Chalet | null>(null);
-  const [isQuickCheckInOpen, setIsQuickCheckInOpen] = useState(false);
   const [isRatesModalOpen, setIsRatesModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isGuestsModalOpen, setIsGuestsModalOpen] = useState(false);
+  const [isReservationsModalOpen, setIsReservationsModalOpen] = useState(false);
+  const [isCloseDayModalOpen, setIsCloseDayModalOpen] = useState(false);
+  const [reserveTargetChaletId, setReserveTargetChaletId] = useState<number | null>(null);
+  const [dayClosingBanner, setDayClosingBanner] = useState<string | null>(null);
+  const [dashboardBanner, setDashboardBanner] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date>(() => new Date());
-  const [copiedSummary, setCopiedSummary] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -223,6 +271,93 @@ export default function App() {
     }
   }, [guests]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(RESERVATIONS_STORAGE_KEY, JSON.stringify(reservations));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [reservations]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(BUSINESS_DATE_STORAGE_KEY, businessDate);
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [businessDate]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DAY_CLOSINGS_STORAGE_KEY, JSON.stringify(dayClosings));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [dayClosings]);
+
+  const activeReservationsByChalet = useMemo(() => {
+    const map = new Map<number, Reservation[]>();
+    const active = reservations
+      .filter(
+        (r) =>
+          r.status === ReservationStatus.CONFIRMADA ||
+          r.status === ReservationStatus.PENDENTE,
+      )
+      .sort((a, b) => a.checkIn.localeCompare(b.checkIn));
+
+    for (const res of active) {
+      const list = map.get(res.chaletId) ?? [];
+      list.push(res);
+      map.set(res.chaletId, list);
+    }
+    return map;
+  }, [reservations]);
+
+  const activeReservationsCount = useMemo(
+    () =>
+      reservations.filter(
+        (r) =>
+          r.status === ReservationStatus.CONFIRMADA ||
+          r.status === ReservationStatus.PENDENTE,
+      ).length,
+    [reservations],
+  );
+
+  const arrivingReservations = useMemo(
+    () =>
+      reservations
+        .filter(
+          (r) =>
+            (r.status === ReservationStatus.CONFIRMADA ||
+              r.status === ReservationStatus.PENDENTE) &&
+            r.checkIn <= businessDate,
+        )
+        .sort((a, b) => a.checkIn.localeCompare(b.checkIn)),
+    [reservations, businessDate],
+  );
+
+  const dayPendingCount = useMemo(() => {
+    const dueCheckoutsCount = chalets.filter(
+      (c) =>
+        c.status === ChaletStatus.OCUPADO &&
+        Boolean(c.checkOut) &&
+        (c.checkOut as string) <= businessDate,
+    ).length;
+
+    const dueCheckinsCount = reservations.filter(
+      (r) =>
+        (r.status === ReservationStatus.CONFIRMADA ||
+          r.status === ReservationStatus.PENDENTE) &&
+        r.checkIn <= businessDate,
+    ).length;
+
+    const missingCheckoutDateCount = chalets.filter(
+      (c) => c.status === ChaletStatus.OCUPADO && !c.checkOut,
+    ).length;
+
+    return dueCheckoutsCount + dueCheckinsCount + missingCheckoutDateCount;
+  }, [chalets, reservations, businessDate]);
+
   const counts = useMemo(() => {
     const occupiedList = chalets.filter((c) => c.status === ChaletStatus.OCUPADO);
     const occupied = occupiedList.length;
@@ -250,42 +385,19 @@ export default function App() {
     };
   }, [chalets, rates, checkoutRecords]);
 
-  const availableChalets = useMemo(
-    () => chalets.filter((c) => c.status === ChaletStatus.LIVRE),
-    [chalets],
-  );
-
   const filteredChalets = useMemo(() => {
-    const normalizedQuery = searchQuery.trim().toLowerCase();
     return chalets.filter((chalet) => {
-      if (categoryFilter !== 'Todos' && chalet.category !== categoryFilter) {
-        return false;
-      }
       if (statusFilter !== 'Todos' && chalet.status !== statusFilter) {
         return false;
       }
-      if (!normalizedQuery) return true;
-
-      const haystack = [
-        chalet.code,
-        chalet.label,
-        chalet.category,
-        chalet.status,
-        chalet.guestName ?? '',
-        chalet.blockReason ?? '',
-      ]
-        .join(' ')
-        .toLowerCase();
-
-      return haystack.includes(normalizedQuery);
+      return true;
     });
-  }, [chalets, categoryFilter, statusFilter, searchQuery]);
+  }, [chalets, statusFilter]);
 
   const handleSaveChalet = (updated: Chalet) => {
     setChalets((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
     setLastUpdated(new Date());
     setEditingChalet(null);
-    setIsQuickCheckInOpen(false);
   };
 
   const handleConfirmCheckout = (record: CheckoutRecord) => {
@@ -387,172 +499,344 @@ export default function App() {
     setLastUpdated(new Date());
   };
 
+  const handleSaveReservation = (saved: Reservation) => {
+    setReservations((prev) => {
+      const exists = prev.some((item) => item.id === saved.id);
+      if (exists) {
+        return prev.map((item) => (item.id === saved.id ? saved : item));
+      }
+      return [saved, ...prev];
+    });
+    setLastUpdated(new Date());
+  };
+
+  const handleUpdateReservationStatus = (id: string, status: ReservationStatus) => {
+    setReservations((prev) =>
+      prev.map((item) =>
+        item.id === id
+          ? { ...item, status, updatedAt: new Date().toISOString() }
+          : item,
+      ),
+    );
+    setLastUpdated(new Date());
+  };
+
+  const handleDeleteReservation = (id: string) => {
+    setReservations((prev) => prev.filter((item) => item.id !== id));
+    setLastUpdated(new Date());
+  };
+
+  const handleCheckInReservation = (reservation: Reservation): string | null => {
+    const targetChalet = chalets.find((c) => c.id === reservation.chaletId);
+    if (!targetChalet) {
+      return 'Acomodação não encontrada.';
+    }
+    if (targetChalet.status !== ChaletStatus.LIVRE) {
+      return `${targetChalet.label} está ${targetChalet.status.toLowerCase()} no momento. Libere ou conclua o check-out antes de efetuar este check-in.`;
+    }
+
+    const now = new Date().toISOString();
+    const effectiveCheckIn =
+      reservation.checkIn > businessDate ? businessDate : reservation.checkIn;
+    const effectiveCheckOut =
+      reservation.checkOut <= effectiveCheckIn
+        ? addDaysYMD(effectiveCheckIn, 1)
+        : reservation.checkOut;
+
+    setChalets((prev) =>
+      prev.map((item) => {
+        if (item.id !== reservation.chaletId) return item;
+        return {
+          ...item,
+          status: ChaletStatus.OCUPADO,
+          guestId: reservation.guestId,
+          guestName: reservation.guestName,
+          guestCount: reservation.guestCount,
+          checkIn: effectiveCheckIn,
+          checkOut: effectiveCheckOut,
+          dailyRate: reservation.dailyRate,
+          extrasAmount: 0,
+          extrasNote: undefined,
+          paidAmount: reservation.depositPaid,
+          blockReason: undefined,
+          notes: reservation.notes,
+          updatedAt: now,
+        };
+      }),
+    );
+
+    setReservations((prev) =>
+      prev.map((item) =>
+        item.id === reservation.id
+          ? {
+              ...item,
+              status: ReservationStatus.CHECKIN_REALIZADO,
+              updatedAt: now,
+            }
+          : item,
+      ),
+    );
+    setLastUpdated(new Date());
+    setDashboardBanner({
+      type: 'success',
+      message: `Check-in de ${reservation.guestName} realizado no ${reservation.chaletLabel}.`,
+    });
+    return null;
+  };
+
+  const handleDashboardCheckInReservation = (reservation: Reservation) => {
+    const err = handleCheckInReservation(reservation);
+    if (err) {
+      setDashboardBanner({ type: 'error', message: err });
+    }
+  };
+
+  const handleConfirmCloseDay = (payload: CloseDayPayload) => {
+    const nowIso = new Date().toISOString();
+    const recordTimestamp =
+      businessDate === getLocalTodayYMD()
+        ? nowIso
+        : new Date(`${businessDate}T18:00:00`).toISOString();
+
+    const newCheckoutRecords: CheckoutRecord[] = [];
+    const checkoutSelectionMap = new Map(
+      payload.checkoutSelections.map((sel) => [sel.chaletId, sel.paymentMethod]),
+    );
+    const releaseCleaningSet = new Set(payload.releaseCleaningChaletIds);
+
+    let nextChalets = chalets.map((chalet, idx) => {
+      const paymentMethod = checkoutSelectionMap.get(chalet.id);
+      if (paymentMethod && chalet.status === ChaletStatus.OCUPADO) {
+        const totals = calculateChaletTotals(chalet, rates);
+        newCheckoutRecords.push({
+          id: `${chalet.id}-${Date.now()}-${idx}`,
+          chaletId: chalet.id,
+          chaletCode: chalet.code,
+          chaletLabel: chalet.label,
+          category: chalet.category,
+          guestName: chalet.guestName ?? 'Hóspede',
+          guestCount: chalet.guestCount ?? 1,
+          checkIn: chalet.checkIn,
+          checkOut: chalet.checkOut || businessDate,
+          nights: totals.nights,
+          dailyRate: totals.dailyRate,
+          lodgingTotal: totals.lodgingTotal,
+          extrasAmount: totals.extrasAmount,
+          extrasNote: chalet.extrasNote,
+          totalAmount: totals.totalAmount,
+          paidBefore: totals.paidAmount,
+          finalCharged: totals.balanceDue,
+          paymentMethod,
+          notes: chalet.notes,
+          closedAt: recordTimestamp,
+        });
+
+        return {
+          ...chalet,
+          status: ChaletStatus.BLOQUEADO,
+          guestId: undefined,
+          guestName: undefined,
+          guestCount: undefined,
+          checkIn: undefined,
+          checkOut: undefined,
+          dailyRate: rates[chalet.category],
+          extrasAmount: undefined,
+          extrasNote: undefined,
+          paidAmount: undefined,
+          blockReason: 'Em limpeza',
+          notes: undefined,
+          updatedAt: nowIso,
+        };
+      }
+
+      if (releaseCleaningSet.has(chalet.id) && chalet.status === ChaletStatus.BLOQUEADO) {
+        return {
+          ...chalet,
+          status: ChaletStatus.LIVRE,
+          blockReason: undefined,
+          dailyRate: rates[chalet.category],
+          updatedAt: nowIso,
+        };
+      }
+
+      return chalet;
+    });
+
+    const checkinIdsSet = new Set(payload.checkinReservationIds);
+    const checkedInReservations = reservations.filter((r) => checkinIdsSet.has(r.id));
+
+    for (const res of checkedInReservations) {
+      nextChalets = nextChalets.map((chalet) => {
+        if (chalet.id !== res.chaletId) return chalet;
+        return {
+          ...chalet,
+          status: ChaletStatus.OCUPADO,
+          guestId: res.guestId,
+          guestName: res.guestName,
+          guestCount: res.guestCount,
+          checkIn: res.checkIn,
+          checkOut: res.checkOut,
+          dailyRate: res.dailyRate,
+          extrasAmount: 0,
+          extrasNote: undefined,
+          paidAmount: res.depositPaid,
+          blockReason: undefined,
+          notes: res.notes,
+          updatedAt: nowIso,
+        };
+      });
+    }
+
+    const existingTodayRevenue = checkoutRecords
+      .filter((rec) => {
+        const closedLocal = getLocalTodayYMD(new Date(rec.closedAt));
+        return closedLocal === businessDate || rec.checkOut === businessDate;
+      })
+      .reduce((sum, rec) => sum + rec.totalAmount, 0);
+
+    const newCheckoutsRevenue = newCheckoutRecords.reduce(
+      (sum, rec) => sum + rec.totalAmount,
+      0,
+    );
+
+    const occupiedEndCount = nextChalets.filter(
+      (c) => c.status === ChaletStatus.OCUPADO,
+    ).length;
+    const availableEndCount = nextChalets.filter(
+      (c) => c.status === ChaletStatus.LIVRE,
+    ).length;
+    const blockedEndCount = nextChalets.filter(
+      (c) => c.status === ChaletStatus.BLOQUEADO,
+    ).length;
+
+    const closingEntry: DailyClosingRecord = {
+      id: `day-${businessDate}-${Date.now()}`,
+      businessDate,
+      closedAt: nowIso,
+      checkoutsCount: newCheckoutRecords.length,
+      checkinsCount: checkedInReservations.length,
+      releasedCleaningCount: payload.releaseCleaningChaletIds.length,
+      occupiedEndCount,
+      availableEndCount,
+      blockedEndCount,
+      dayRevenue: existingTodayRevenue + newCheckoutsRevenue,
+      notes: payload.notes || undefined,
+      checkoutIds: newCheckoutRecords.map((r) => r.id),
+      checkinReservationIds: checkedInReservations.map((r) => r.id),
+    };
+
+    setChalets(nextChalets);
+    if (newCheckoutRecords.length > 0) {
+      setCheckoutRecords((prev) => [...newCheckoutRecords, ...prev]);
+    }
+    if (checkedInReservations.length > 0) {
+      setReservations((prev) =>
+        prev.map((item) =>
+          checkinIdsSet.has(item.id)
+            ? {
+                ...item,
+                status: ReservationStatus.CHECKIN_REALIZADO,
+                updatedAt: nowIso,
+              }
+            : item,
+        ),
+      );
+    }
+    setDayClosings((prev) => [closingEntry, ...prev]);
+
+    const nextBusinessDate = payload.advanceDate
+      ? addDaysYMD(businessDate, 1)
+      : businessDate;
+    if (payload.advanceDate) {
+      setBusinessDate(nextBusinessDate);
+    }
+
+    setLastUpdated(new Date());
+    setIsCloseDayModalOpen(false);
+    setDayClosingBanner(
+      `Dia ${formatDateShortBR(businessDate)} fechado: ${newCheckoutRecords.length} check-out(s), ${checkedInReservations.length} check-in(s)${
+        payload.advanceDate
+          ? `. Painel atualizado para ${formatDateShortBR(nextBusinessDate)}.`
+          : '.'
+      }`,
+    );
+  };
+
+  const handleSyncToday = () => {
+    setBusinessDate(getLocalTodayYMD());
+    setLastUpdated(new Date());
+  };
+
+  const handleDeleteDayClosing = (id: string) => {
+    setDayClosings((prev) => prev.filter((item) => item.id !== id));
+    setLastUpdated(new Date());
+  };
+
   const handleRefresh = () => {
     setLastUpdated(new Date());
   };
 
-  const handleCopySummary = async () => {
-    const lines = [
-      `Pousada Vale do Ermitão — ${formatDateHeading(new Date())}`,
-      `Ocupação: ${counts.occupied}/${counts.total} (${counts.occupancyRate}%)`,
-      `Livres: ${counts.available} | Ocupados: ${counts.occupied} | Bloqueados: ${counts.blocked}`,
-      `Saldo ativo a receber: ${formatCurrencyBRL(counts.activeReceivable)}`,
-      ...(checkoutRecords.length > 0
-        ? [`Check-outs realizados (${checkoutRecords.length}): ${formatCurrencyBRL(counts.closedTotal)}`]
-        : []),
-      '',
-      ...chalets.map((c) => {
-        if (c.status === ChaletStatus.OCUPADO) {
-          const totals = calculateChaletTotals(c, rates);
-          return `${c.label} [${c.category}]: Ocupado (${c.guestName ?? 'Hóspede'}) · Saldo ${formatCurrencyBRL(totals.balanceDue)}`;
-        }
-        if (c.status === ChaletStatus.BLOQUEADO) {
-          return `${c.label} [${c.category}]: Bloqueado (${c.blockReason ?? 'Indisponível'})`;
-        }
-        return `${c.label} [${c.category}]: Livre (${formatCurrencyBRL(rates[c.category])}/dia)`;
-      }),
-    ];
-
-    try {
-      await navigator.clipboard.writeText(lines.join('\n'));
-      setCopiedSummary(true);
-      window.setTimeout(() => setCopiedSummary(false), 2000);
-    } catch {
-      // Clipboard API unavailable
-    }
-  };
-
   const handleResetFilters = () => {
-    setCategoryFilter('Todos');
     setStatusFilter('Todos');
-    setSearchQuery('');
   };
 
-  const hasActiveFilters =
-    categoryFilter !== 'Todos' || statusFilter !== 'Todos' || searchQuery.trim() !== '';
+  const hasActiveFilters = statusFilter !== 'Todos';
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors duration-150">
-      <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-8">
-          <a
-            href="#painel"
-            onClick={(e) => {
-              e.preventDefault();
-              handleResetFilters();
-            }}
-            className="font-display text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap shrink-0"
-          >
+      <main id="painel" className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        <div>
+          <h1 className="font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
             Pousada Vale do Ermitão
-          </a>
+          </h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400 tabular-nums mt-0.5">
+            Painel de Acomodações · {formatDateHeadingFromYMD(businessDate)} · 11 Stand · 6 Ermitão · 1 Hidro · 1 Casa
+          </p>
+        </div>
 
-          <nav
-            aria-label="Categorias de acomodações"
-            className="hidden md:flex items-center gap-6"
+        {dayClosingBanner && (
+          <div
+            role="status"
+            className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/50 px-4 py-2.5 text-xs font-medium text-emerald-900 dark:text-emerald-200"
           >
-            {CATEGORY_TABS.map((tab) => {
-              const isActive = categoryFilter === tab.key;
-              return (
-                <button
-                  key={tab.key}
-                  type="button"
-                  onClick={() => setCategoryFilter(tab.key)}
-                  className={`relative py-1 text-sm font-medium transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 dark:focus-visible:ring-slate-200 rounded ${
-                    isActive
-                      ? 'text-slate-900 dark:text-slate-100 after:absolute after:inset-x-0 after:-bottom-1 after:h-0.5 after:bg-slate-900 dark:after:bg-slate-100'
-                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              );
-            })}
-          </nav>
-
-          <div className="shrink-0">
+            <span>{dayClosingBanner}</span>
             <button
               type="button"
-              onClick={() => setIsQuickCheckInOpen(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white dark:text-slate-950 bg-slate-900 dark:bg-slate-100 rounded-lg hover:bg-slate-800 dark:hover:bg-white transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 dark:focus-visible:ring-slate-200 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900"
+              onClick={() => setDayClosingBanner(null)}
+              aria-label="Fechar aviso"
+              className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10"
             >
-              <Plus className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span>Novo Check-in</span>
+              <X className="h-3.5 w-3.5" />
             </button>
           </div>
-        </div>
-      </header>
+        )}
 
-      <main id="painel" className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-2">
-          <div>
-            <h1 className="font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-              Painel de Acomodações
-            </h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400 tabular-nums mt-0.5">
-              {formatDateHeading(lastUpdated)} · 11 Stand · 6 Ermitão · 1 Hidro · 1 Casa
-            </p>
+        {dashboardBanner && (
+          <div
+            role={dashboardBanner.type === 'error' ? 'alert' : 'status'}
+            className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-2.5 text-xs font-medium ${
+              dashboardBanner.type === 'error'
+                ? 'border-rose-200 dark:border-rose-800/80 bg-rose-50 dark:bg-rose-950/50 text-rose-900 dark:text-rose-200'
+                : 'border-emerald-200 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-900 dark:text-emerald-200'
+            }`}
+          >
+            <span>{dashboardBanner.message}</span>
+            <button
+              type="button"
+              onClick={() => setDashboardBanner(null)}
+              aria-label="Fechar aviso de check-in"
+              className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
-
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-slate-400 tabular-nums">
-            <span>
-              A receber:{' '}
-              <strong className="font-mono text-slate-900 dark:text-slate-100">
-                {formatCurrencyBRL(counts.activeReceivable)}
-              </strong>
-            </span>
-            {checkoutRecords.length > 0 && (
-              <>
-                <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">·</span>
-                <button
-                  type="button"
-                  onClick={() => setIsReportModalOpen(true)}
-                  className="hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 dark:focus-visible:ring-slate-200 rounded"
-                >
-                  Check-outs ({checkoutRecords.length}):{' '}
-                  <strong className="font-mono text-emerald-800 dark:text-emerald-300">
-                    {formatCurrencyBRL(counts.closedTotal)}
-                  </strong>
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-
-        <KpiSummary
-          total={counts.total}
-          occupied={counts.occupied}
-          available={counts.available}
-          blocked={counts.blocked}
-          activeStatus={statusFilter}
-          onSelectStatus={setStatusFilter}
-        />
+        )}
 
         <section
           aria-label="Filtros e busca"
           className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3"
         >
           <div className="flex flex-wrap items-center gap-2">
-            <div
-              className="flex md:hidden items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg overflow-x-auto max-w-full"
-              role="group"
-              aria-label="Filtrar por categoria"
-            >
-              {CATEGORY_TABS.map((tab) => (
-                <button
-                  key={tab.key}
-                  type="button"
-                  onClick={() => setCategoryFilter(tab.key)}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                    categoryFilter === tab.key
-                      ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 shadow-sm'
-                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-
             <div
               className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg overflow-x-auto max-w-full"
               role="group"
@@ -561,12 +845,21 @@ export default function App() {
               {STATUS_FILTERS.map((item) => {
                 const Icon = item.icon;
                 const isActive = statusFilter === item.key;
+                const count =
+                  item.key === 'Todos'
+                    ? counts.total
+                    : item.key === ChaletStatus.LIVRE
+                      ? counts.available
+                      : item.key === ChaletStatus.OCUPADO
+                        ? counts.occupied
+                        : counts.blocked;
+
                 return (
                   <button
                     key={item.key}
                     type="button"
                     onClick={() => setStatusFilter(item.key)}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 tabular-nums ${
                       isActive
                         ? 'bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 shadow-sm'
                         : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
@@ -575,7 +868,9 @@ export default function App() {
                     {Icon && (
                       <Icon className={`h-3.5 w-3.5 shrink-0 ${item.dotColor}`} aria-hidden="true" />
                     )}
-                    <span>{item.label}</span>
+                    <span>
+                      {item.label} ({count})
+                    </span>
                   </button>
                 );
               })}
@@ -593,82 +888,192 @@ export default function App() {
             )}
           </div>
 
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setIsGuestsModalOpen(true)}
-                className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 h-10 px-3.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600 rounded-lg transition-colors whitespace-nowrap shrink-0 tabular-nums"
-              >
-                <Users className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
-                <span>Hóspedes ({guests.length})</span>
-              </button>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsCloseDayModalOpen(true)}
+              title={
+                dayPendingCount > 0
+                  ? `${dayPendingCount} pendência(s) operacional(is) para ${formatDateShortBR(businessDate)}`
+                  : `Fechar o dia ${formatDateShortBR(businessDate)}`
+              }
+              className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 h-10 px-3.5 text-xs font-medium text-white dark:text-slate-950 bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white rounded-lg transition-colors whitespace-nowrap shrink-0 tabular-nums"
+            >
+              {dayPendingCount > 0 ? (
+                <AlertTriangle
+                  className="h-3.5 w-3.5 text-amber-300 dark:text-amber-700"
+                  aria-hidden="true"
+                />
+              ) : (
+                <CalendarCheck className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              <span>
+                Fechar o dia{dayPendingCount > 0 ? ` (${dayPendingCount})` : ''}
+              </span>
+            </button>
 
-              <button
-                type="button"
-                onClick={() => setIsReportModalOpen(true)}
-                className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 h-10 px-3.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600 rounded-lg transition-colors whitespace-nowrap shrink-0 tabular-nums"
-              >
-                <FileText className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
-                <span>
-                  Fechamento{checkoutRecords.length > 0 ? ` (${checkoutRecords.length})` : ''}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setIsRatesModalOpen(true)}
-                className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 h-10 px-3.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600 rounded-lg transition-colors whitespace-nowrap shrink-0"
-              >
-                <DollarSign className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
-                <span>Valores</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'))}
-                aria-label={theme === 'light' ? 'Ativar modo escuro' : 'Ativar modo claro'}
-                title={theme === 'light' ? 'Modo escuro' : 'Modo claro'}
-                className="inline-flex items-center justify-center h-10 w-10 text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600 rounded-lg transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 dark:focus-visible:ring-slate-200"
-              >
-                {theme === 'light' ? (
-                  <Moon className="h-4 w-4" aria-hidden="true" />
-                ) : (
-                  <Sun className="h-4 w-4" aria-hidden="true" />
-                )}
-              </button>
-            </div>
-
-            <div className="relative w-full sm:w-60 shrink-0">
-              <Search
-                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 dark:text-slate-500"
+            <button
+              type="button"
+              onClick={() => {
+                setReserveTargetChaletId(null);
+                setIsReservationsModalOpen(true);
+              }}
+              className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 h-10 px-3.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600 rounded-lg transition-colors whitespace-nowrap shrink-0 tabular-nums"
+            >
+              <CalendarClock
+                className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400"
                 aria-hidden="true"
               />
-              <input
-                type="search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Pesquisar chalé ou hóspede..."
-                aria-label="Pesquisar chalé ou hóspede"
-                className="w-full h-10 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-950 pl-9 pr-3 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-slate-900 dark:focus:border-slate-300 focus:bg-white dark:focus:bg-slate-950 focus:outline-none"
-              />
-            </div>
+              <span>Reservas ({activeReservationsCount})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsGuestsModalOpen(true)}
+              className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 h-10 px-3.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600 rounded-lg transition-colors whitespace-nowrap shrink-0 tabular-nums"
+            >
+              <Users className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
+              <span>Hóspedes ({guests.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsReportModalOpen(true)}
+              className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 h-10 px-3.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600 rounded-lg transition-colors whitespace-nowrap shrink-0 tabular-nums"
+            >
+              <FileText className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
+              <span>
+                Fechamento{checkoutRecords.length > 0 ? ` (${checkoutRecords.length})` : ''}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsRatesModalOpen(true)}
+              className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 h-10 px-3.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600 rounded-lg transition-colors whitespace-nowrap shrink-0"
+            >
+              <DollarSign className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
+              <span>Valores</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'))}
+              aria-label={theme === 'light' ? 'Ativar modo escuro' : 'Ativar modo claro'}
+              title={theme === 'light' ? 'Modo escuro' : 'Modo claro'}
+              className="inline-flex items-center justify-center h-10 w-10 text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600 rounded-lg transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 dark:focus-visible:ring-slate-200"
+            >
+              {theme === 'light' ? (
+                <Moon className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <Sun className="h-4 w-4" aria-hidden="true" />
+              )}
+            </button>
           </div>
         </section>
+
+        {arrivingReservations.length > 0 && (
+          <section
+            aria-label="Reservas que estão para chegar"
+            className="rounded-xl border border-sky-200 dark:border-sky-800/80 bg-sky-50/70 dark:bg-sky-950/30 p-3.5 space-y-2.5"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="inline-flex items-center gap-2 text-xs font-semibold text-sky-950 dark:text-sky-200">
+                <LogIn className="h-4 w-4 text-sky-700 dark:text-sky-400 shrink-0" aria-hidden="true" />
+                <span>
+                  Reservas para chegar ({arrivingReservations.length})
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setReserveTargetChaletId(null);
+                  setIsReservationsModalOpen(true);
+                }}
+                className="text-xs font-medium text-sky-800 dark:text-sky-300 hover:underline whitespace-nowrap"
+              >
+                Abrir agenda de reservas
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+              {arrivingReservations.map((res) => {
+                const target = chalets.find((c) => c.id === res.chaletId);
+                const isOverdue = res.checkIn < businessDate;
+                return (
+                  <div
+                    key={res.id}
+                    className="flex items-center justify-between gap-3 rounded-lg border border-sky-200/80 dark:border-sky-800/70 bg-white dark:bg-slate-900 px-3 py-2 text-xs"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                        {res.chaletLabel} · {res.guestName}
+                      </p>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 tabular-nums truncate">
+                        {formatDateShortBR(res.checkIn)} → {formatDateShortBR(res.checkOut)}
+                        {isOverdue ? ' · em atraso' : ' · chegada hoje'}
+                        {target && target.status !== ChaletStatus.LIVRE
+                          ? ` · ${target.status === ChaletStatus.BLOQUEADO ? target.blockReason || 'Bloqueado' : 'Ocupado'}`
+                          : ''}
+                      </p>
+                    </div>
+
+                    {target?.status === ChaletStatus.LIVRE ? (
+                      <button
+                        type="button"
+                        onClick={() => handleDashboardCheckInReservation(res)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-white dark:text-slate-950 bg-emerald-700 hover:bg-emerald-800 dark:bg-emerald-400 dark:hover:bg-emerald-300 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                      >
+                        <LogIn className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Dar check-in</span>
+                      </button>
+                    ) : target?.status === ChaletStatus.BLOQUEADO ? (
+                      <button
+                        type="button"
+                        onClick={() => handleReleaseChalet(target)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-amber-900 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/70 border border-amber-300 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/70 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Liberar</span>
+                      </button>
+                    ) : target ? (
+                      <button
+                        type="button"
+                        onClick={() => setCheckoutChalet(target)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-rose-800 dark:text-rose-200 bg-rose-50 dark:bg-rose-950/70 border border-rose-200 dark:border-rose-800 hover:bg-rose-100 dark:hover:bg-rose-900/70 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                      >
+                        <span>Check-out atual</span>
+                      </button>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         <section aria-label="Grade de chalés e acomodações">
           {filteredChalets.length > 0 ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3.5">
-              {filteredChalets.map((chalet) => (
-                <ChaletCard
-                  key={chalet.id}
-                  chalet={chalet}
-                  rates={rates}
-                  onSelect={(selected) => setEditingChalet(selected)}
-                  onCheckout={(selected) => setCheckoutChalet(selected)}
-                  onRelease={handleReleaseChalet}
-                />
-              ))}
+              {filteredChalets.map((chalet) => {
+                const todayEntries = (activeReservationsByChalet.get(chalet.id) ?? []).filter(
+                  (r) => r.checkIn === businessDate,
+                );
+                return (
+                  <ChaletCard
+                    key={chalet.id}
+                    chalet={chalet}
+                    rates={rates}
+                    businessDate={businessDate}
+                    nextReservation={todayEntries[0]}
+                    upcomingCount={todayEntries.length}
+                    onSelect={(selected) => setEditingChalet(selected)}
+                    onCheckout={(selected) => setCheckoutChalet(selected)}
+                    onRelease={handleReleaseChalet}
+                    onCheckInReservation={handleDashboardCheckInReservation}
+                  />
+                );
+              })}
             </div>
           ) : (
             <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 py-14 px-6 text-center">
@@ -722,24 +1127,6 @@ export default function App() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={handleCopySummary}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
-              >
-                {copiedSummary ? (
-                  <>
-                    <Check className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-                    <span>Copiado</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Copiar resumo</span>
-                  </>
-                )}
-              </button>
-
-              <button
-                type="button"
                 onClick={handleRefresh}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
               >
@@ -756,6 +1143,8 @@ export default function App() {
           chalet={editingChalet}
           rates={rates}
           guests={guests}
+          businessDate={businessDate}
+          upcomingReservations={activeReservationsByChalet.get(editingChalet.id) ?? []}
           onClose={() => setEditingChalet(null)}
           onSave={handleSaveChalet}
           onSaveGuest={handleSaveGuest}
@@ -764,19 +1153,12 @@ export default function App() {
             setEditingChalet(null);
             setCheckoutChalet(updated);
           }}
-        />
-      )}
-
-      {isQuickCheckInOpen && (
-        <ChaletModal
-          chalet={null}
-          rates={rates}
-          guests={guests}
-          availableChalets={availableChalets}
-          isQuickCheckIn
-          onClose={() => setIsQuickCheckInOpen(false)}
-          onSave={handleSaveChalet}
-          onSaveGuest={handleSaveGuest}
+          onOpenReserve={(target) => {
+            setEditingChalet(null);
+            setReserveTargetChaletId(target.id);
+            setIsReservationsModalOpen(true);
+          }}
+          onCheckInReservation={handleCheckInReservation}
         />
       )}
 
@@ -784,6 +1166,7 @@ export default function App() {
         <CheckoutModal
           chalet={checkoutChalet}
           rates={rates}
+          businessDate={businessDate}
           onClose={() => setCheckoutChalet(null)}
           onConfirmCheckout={handleConfirmCheckout}
         />
@@ -800,6 +1183,7 @@ export default function App() {
       {isReportModalOpen && (
         <AccountReportModal
           records={checkoutRecords}
+          businessDate={businessDate}
           onClose={() => setIsReportModalOpen(false)}
           onDeleteRecord={handleDeleteCheckoutRecord}
         />
@@ -812,6 +1196,41 @@ export default function App() {
           onClose={() => setIsGuestsModalOpen(false)}
           onSaveGuest={handleSaveGuest}
           onDeleteGuest={handleDeleteGuest}
+        />
+      )}
+
+      {isReservationsModalOpen && (
+        <ReservationsModal
+          reservations={reservations}
+          chalets={chalets}
+          rates={rates}
+          guests={guests}
+          businessDate={businessDate}
+          initialChaletId={reserveTargetChaletId}
+          onClose={() => {
+            setIsReservationsModalOpen(false);
+            setReserveTargetChaletId(null);
+          }}
+          onSaveReservation={handleSaveReservation}
+          onUpdateStatus={handleUpdateReservationStatus}
+          onDeleteReservation={handleDeleteReservation}
+          onCheckInReservation={handleCheckInReservation}
+          onSaveGuest={handleSaveGuest}
+        />
+      )}
+
+      {isCloseDayModalOpen && (
+        <CloseDayModal
+          businessDate={businessDate}
+          chalets={chalets}
+          rates={rates}
+          reservations={reservations}
+          checkoutRecords={checkoutRecords}
+          dayClosings={dayClosings}
+          onClose={() => setIsCloseDayModalOpen(false)}
+          onConfirmCloseDay={handleConfirmCloseDay}
+          onSyncToday={handleSyncToday}
+          onDeleteDayClosing={handleDeleteDayClosing}
         />
       )}
     </div>

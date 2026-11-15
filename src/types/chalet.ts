@@ -77,5 +77,49 @@ export interface CheckoutRecord {
   closedAt: string;
 }
 
+export enum ReservationStatus {
+  CONFIRMADA = 'Confirmada',
+  PENDENTE = 'Pendente',
+  CHECKIN_REALIZADO = 'Check-in realizado',
+  CANCELADA = 'Cancelada',
+}
+
+export interface Reservation {
+  id: string;
+  chaletId: number;
+  chaletCode: string;
+  chaletLabel: string;
+  category: ChaletCategory;
+  guestId?: string;
+  guestName: string;
+  guestDocument?: string;
+  guestPhone?: string;
+  guestCount: number;
+  checkIn: string;
+  checkOut: string;
+  dailyRate: number;
+  depositPaid: number;
+  notes?: string;
+  status: ReservationStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DailyClosingRecord {
+  id: string;
+  businessDate: string;
+  closedAt: string;
+  checkoutsCount: number;
+  checkinsCount: number;
+  releasedCleaningCount: number;
+  occupiedEndCount: number;
+  availableEndCount: number;
+  blockedEndCount: number;
+  dayRevenue: number;
+  notes?: string;
+  checkoutIds: string[];
+  checkinReservationIds: string[];
+}
+
 export type CategoryFilter = 'Todos' | ChaletCategory;
 export type StatusFilter = 'Todos' | ChaletStatus;

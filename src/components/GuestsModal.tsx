@@ -1,7 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
-  Download,
   Pencil,
   Plus,
   Search,
@@ -40,14 +39,6 @@ type GuestFieldKey =
   | 'cityState'
   | 'birthDate'
   | 'vehiclePlate';
-
-function escapeCsvCell(value: string | undefined): string {
-  const str = String(value ?? '');
-  if (/[;"\n\r,]/.test(str)) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
-}
 
 export function GuestsModal({
   guests,
@@ -216,45 +207,6 @@ export function GuestsModal({
     setEditingGuest(null);
   };
 
-  const handleExportCsv = () => {
-    const headers = [
-      'Nome Completo',
-      'CPF / Documento',
-      'Telefone / WhatsApp',
-      'E-mail',
-      'Cidade / UF',
-      'Data de Nascimento',
-      'Placa do Veículo',
-      'Observações',
-    ];
-
-    const rows = filteredGuests.map((g) =>
-      [
-        g.fullName,
-        g.document ?? '',
-        g.phone ?? '',
-        g.email ?? '',
-        g.cityState ?? '',
-        g.birthDate ?? '',
-        g.vehiclePlate ?? '',
-        g.notes ?? '',
-      ]
-        .map(escapeCsvCell)
-        .join(';'),
-    );
-
-    const csvContent = '\uFEFF' + [headers.map(escapeCsvCell).join(';'), ...rows].join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `hospedes-pve-${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
   const baseInputClass =
     'w-full h-10 rounded-lg border bg-white dark:bg-slate-950 px-3 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none transition-colors';
 
@@ -289,25 +241,14 @@ export function GuestsModal({
 
           <div className="flex items-center gap-2">
             {!isFormOpen && (
-              <>
-                <button
-                  type="button"
-                  onClick={handleExportCsv}
-                  disabled={filteredGuests.length === 0}
-                  className="inline-flex items-center gap-1.5 h-9 px-3 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap"
-                >
-                  <Download className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>Exportar CSV</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={openNewForm}
-                  className="inline-flex items-center gap-1.5 h-9 px-3.5 text-xs font-medium text-white dark:text-slate-950 bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white rounded-lg transition-colors whitespace-nowrap"
-                >
-                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>Novo Hóspede</span>
-                </button>
-              </>
+              <button
+                type="button"
+                onClick={openNewForm}
+                className="inline-flex items-center gap-1.5 h-9 px-3.5 text-xs font-medium text-white dark:text-slate-950 bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white rounded-lg transition-colors whitespace-nowrap"
+              >
+                <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Novo Hóspede</span>
+              </button>
             )}
 
             <button

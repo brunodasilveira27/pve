@@ -1,18 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Check,
-  Copy,
-  Download,
+  FileDown,
   Printer,
   Search,
   Trash2,
   X,
 } from 'lucide-react';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { formatCurrencyBRL } from '../data/initialChalets';
 import { CheckoutRecord, PaymentMethod } from '../types/chalet';
 
 interface AccountReportModalProps {
   records: CheckoutRecord[];
+  businessDate?: string;
   onClose: () => void;
   onDeleteRecord: (id: string) => void;
 }
@@ -46,16 +47,9 @@ function formatDateShortBR(dateStr?: string): string {
   return `${day}/${month}/${year.slice(2)}`;
 }
 
-function escapeCsvCell(value: string | number | undefined): string {
-  const str = String(value ?? '');
-  if (/[;"\n\r,]/.test(str)) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
-}
-
 export function AccountReportModal({
   records,
+  businessDate,
   onClose,
   onDeleteRecord,
 }: AccountReportModalProps) {
@@ -64,8 +58,6 @@ export function AccountReportModal({
   const [dateTo, setDateTo] = useState('');
   const [paymentFilter, setPaymentFilter] = useState<'Todas' | PaymentMethod>('Todas');
   const [searchQuery, setSearchQuery] = useState('');
-  const [copiedReport, setCopiedReport] = useState(false);
-  const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -77,10 +69,14 @@ export function AccountReportModal({
   }, [onClose]);
 
   const filteredRecords = useMemo(() => {
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const refDate = businessDate ? new Date(`${businessDate}T12:00:00`) : new Date();
+    const todayStart = new Date(
+      refDate.getFullYear(),
+      refDate.getMonth(),
+      refDate.getDate(),
+    ).getTime();
     const sevenDaysAgo = todayStart - 6 * 24 * 60 * 60 * 1000;
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const monthStart = new Date(refDate.getFullYear(), refDate.getMonth(), 1).getTime();
     const query = searchQuery.trim().toLowerCase();
 
     return records.filter((rec) => {
@@ -157,129 +153,234 @@ export function AccountReportModal({
     );
   }, [filteredRecords]);
 
-  const handleCopyFullReport = async () => {
-    const lines = [
-      `Pousada Vale do Ermitão — Relatório de Fechamento de Conta`,
-      `Emitido em: ${formatDateTimeBR(new Date().toISOString())}`,
-      `Contas fechadas: ${summary.count} (${summary.nights} diárias)`,
-      `Subtotal hospedagem: ${formatCurrencyBRL(summary.lodging)}`,
-      `Subtotal consumo/extras: ${formatCurrencyBRL(summary.extras)}`,
-      `Total geral das contas: ${formatCurrencyBRL(summary.total)}`,
-      `Sinais recebidos antes: ${formatCurrencyBRL(summary.paidBefore)}`,
-      `Recebido no check-out: ${formatCurrencyBRL(summary.finalCharged)}`,
-      `Por forma de pagamento (check-out): Pix ${formatCurrencyBRL(summary.byMethod[PaymentMethod.PIX])} | Cartão ${formatCurrencyBRL(summary.byMethod[PaymentMethod.CARTAO])} | Dinheiro ${formatCurrencyBRL(summary.byMethod[PaymentMethod.DINHEIRO])} | Transferência ${formatCurrencyBRL(summary.byMethod[PaymentMethod.TRANSFERENCIA])}`,
-      '',
-      'Detalhamento:',
-      ...filteredRecords.map((rec) => {
-        const lodging = rec.lodgingTotal ?? rec.nights * rec.dailyRate;
-        const periodInfo =
-          rec.checkIn || rec.checkOut
-            ? ` (${formatDateShortBR(rec.checkIn)} a ${formatDateShortBR(rec.checkOut)})`
-            : '';
-        return [
-          `• ${formatDateTimeBR(rec.closedAt)} — ${rec.chaletLabel} (${rec.category}) — ${rec.guestName}${periodInfo}`,
-          `  Diárias: ${rec.nights}x ${formatCurrencyBRL(rec.dailyRate)} = ${formatCurrencyBRL(lodging)} | Extras: ${formatCurrencyBRL(rec.extrasAmount)}${rec.extrasNote ? ` (${rec.extrasNote})` : ''}`,
-          `  Total: ${formatCurrencyBRL(rec.totalAmount)} | Sinal: ${formatCurrencyBRL(rec.paidBefore)} | Pago no check-out: ${formatCurrencyBRL(rec.finalCharged)} (${rec.paymentMethod})${rec.notes ? ` | Obs.: ${rec.notes}` : ''}`,
-        ].join('\n');
-      }),
-    ];
+  const handleDownloadPdf = () => {
+    if (filteredRecords.length === 0) return;
 
-    try {
-      await navigator.clipboard.writeText(lines.join('\n'));
-      setCopiedReport(true);
-      window.setTimeout(() => setCopiedReport(false), 2000);
-    } catch {
-      // Clipboard API unavailable
-    }
-  };
-
-  const handleCopySingleReceipt = async (rec: CheckoutRecord) => {
-    const lodging = rec.lodgingTotal ?? rec.nights * rec.dailyRate;
-    const lines = [
-      `Pousada Vale do Ermitão — Comprovante de Fechamento`,
-      `Data do fechamento: ${formatDateTimeBR(rec.closedAt)}`,
-      `Acomodação: ${rec.chaletLabel} (${rec.category})`,
-      `Hóspede: ${rec.guestName} (${rec.guestCount ?? 1} ${(rec.guestCount ?? 1) === 1 ? 'hóspede' : 'hóspedes'})`,
-      ...(rec.checkIn || rec.checkOut
-        ? [`Período: ${formatDateShortBR(rec.checkIn)} a ${formatDateShortBR(rec.checkOut)}`]
-        : []),
-      `Diárias: ${rec.nights}x ${formatCurrencyBRL(rec.dailyRate)} = ${formatCurrencyBRL(lodging)}`,
-      ...(rec.extrasAmount > 0
-        ? [
-            `Consumo/Extras${rec.extrasNote ? ` (${rec.extrasNote})` : ''}: ${formatCurrencyBRL(rec.extrasAmount)}`,
-          ]
-        : []),
-      `Total da conta: ${formatCurrencyBRL(rec.totalAmount)}`,
-      ...(rec.paidBefore > 0 ? [`Sinal / Já pago: -${formatCurrencyBRL(rec.paidBefore)}`] : []),
-      `Pago no check-out (${rec.paymentMethod}): ${formatCurrencyBRL(rec.finalCharged)}`,
-      ...(rec.notes ? [`Obs.: ${rec.notes}`] : []),
-    ];
-
-    try {
-      await navigator.clipboard.writeText(lines.join('\n'));
-      setCopiedRowId(rec.id);
-      window.setTimeout(() => setCopiedRowId(null), 2000);
-    } catch {
-      // Clipboard API unavailable
-    }
-  };
-
-  const handleExportCsv = () => {
-    const headers = [
-      'Data/Hora Fechamento',
-      'Acomodação',
-      'Categoria',
-      'Hóspede',
-      'Qtd Hóspedes',
-      'Check-in',
-      'Check-out',
-      'Diárias',
-      'Valor Diária (R$)',
-      'Subtotal Hospedagem (R$)',
-      'Consumo/Extras (R$)',
-      'Descrição Consumo',
-      'Total da Conta (R$)',
-      'Sinal / Já Pago (R$)',
-      'Pago no Check-out (R$)',
-      'Forma de Pagamento',
-      'Observações',
-    ];
-
-    const rows = filteredRecords.map((rec) => {
-      const lodging = rec.lodgingTotal ?? rec.nights * rec.dailyRate;
-      return [
-        formatDateTimeBR(rec.closedAt),
-        rec.chaletLabel,
-        rec.category,
-        rec.guestName,
-        rec.guestCount ?? 1,
-        formatDateShortBR(rec.checkIn),
-        formatDateShortBR(rec.checkOut),
-        rec.nights,
-        rec.dailyRate.toFixed(2).replace('.', ','),
-        lodging.toFixed(2).replace('.', ','),
-        rec.extrasAmount.toFixed(2).replace('.', ','),
-        rec.extrasNote ?? '',
-        rec.totalAmount.toFixed(2).replace('.', ','),
-        rec.paidBefore.toFixed(2).replace('.', ','),
-        rec.finalCharged.toFixed(2).replace('.', ','),
-        rec.paymentMethod,
-        rec.notes ?? '',
-      ]
-        .map(escapeCsvCell)
-        .join(';');
+    const doc = new jsPDF({
+      orientation: 'landscape',
+      unit: 'mm',
+      format: 'a4',
     });
 
-    const csvContent = '\uFEFF' + [headers.map(escapeCsvCell).join(';'), ...rows].join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `relatorio-fechamento-pve-${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const marginX = 14;
+    const usableWidth = pageWidth - marginX * 2;
+
+    const periodLabels: Record<PeriodFilter, string> = {
+      hoje: 'Hoje',
+      '7dias': 'Últimos 7 dias',
+      mes: 'Este mês',
+      todos: 'Todo o período',
+    };
+    const activePeriodText =
+      dateFrom || dateTo
+        ? `${dateFrom ? formatDateShortBR(dateFrom) : '...'} até ${dateTo ? formatDateShortBR(dateTo) : '...'}`
+        : periodLabels[period];
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15);
+    doc.setTextColor(15, 23, 42);
+    doc.text('Pousada Vale do Ermitão — Relatório de Fechamento de Conta', marginX, 16);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(71, 85, 105);
+    const filterLine = [
+      `Emitido em: ${formatDateTimeBR(new Date().toISOString())}`,
+      `Período: ${activePeriodText}`,
+      `Pagamento: ${paymentFilter}`,
+      ...(searchQuery.trim() ? [`Busca: "${searchQuery.trim()}"`] : []),
+    ].join('   |   ');
+    doc.text(filterLine, marginX, 22);
+
+    const boxGap = 4;
+    const boxWidth = (usableWidth - boxGap * 3) / 4;
+    const boxY = 27;
+    const boxHeight = 18;
+
+    const kpiBoxes = [
+      {
+        label: 'Contas Fechadas',
+        value: String(summary.count),
+        sub: `${summary.nights} ${summary.nights === 1 ? 'diária' : 'diárias'} no total`,
+        highlight: false,
+      },
+      {
+        label: 'Subtotal Hospedagem',
+        value: formatCurrencyBRL(summary.lodging),
+        sub: 'Diárias cobradas',
+        highlight: false,
+      },
+      {
+        label: 'Consumo / Extras',
+        value: formatCurrencyBRL(summary.extras),
+        sub: 'Frigobar e adicionais',
+        highlight: false,
+      },
+      {
+        label: 'Faturamento Total',
+        value: formatCurrencyBRL(summary.total),
+        sub: `Sinais: ${formatCurrencyBRL(summary.paidBefore)} | Check-out: ${formatCurrencyBRL(summary.finalCharged)}`,
+        highlight: true,
+      },
+    ];
+
+    kpiBoxes.forEach((box, idx) => {
+      const x = marginX + idx * (boxWidth + boxGap);
+      if (box.highlight) {
+        doc.setFillColor(236, 253, 245);
+        doc.setDrawColor(167, 243, 208);
+      } else {
+        doc.setFillColor(248, 250, 252);
+        doc.setDrawColor(226, 232, 240);
+      }
+      doc.roundedRect(x, boxY, boxWidth, boxHeight, 2, 2, 'FD');
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(box.highlight ? 6 : 100, box.highlight ? 78 : 116, box.highlight ? 59 : 139);
+      doc.text(box.label, x + 3, boxY + 5);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12);
+      doc.setTextColor(box.highlight ? 6 : 15, box.highlight ? 78 : 23, box.highlight ? 59 : 42);
+      doc.text(box.value, x + 3, boxY + 11.2);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(box.highlight ? 4 : 100, box.highlight ? 120 : 116, box.highlight ? 87 : 139);
+      doc.text(box.sub, x + 3, boxY + 15.8, { maxWidth: boxWidth - 6 });
+    });
+
+    const methodY = boxY + boxHeight + 4;
+    doc.setFillColor(255, 255, 255);
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(marginX, methodY, usableWidth, 9, 1.5, 1.5, 'FD');
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(51, 65, 85);
+    const paymentSummaryText = [
+      `Check-out por forma de pagamento:`,
+      `Pix: ${formatCurrencyBRL(summary.byMethod[PaymentMethod.PIX])}`,
+      `Cartão: ${formatCurrencyBRL(summary.byMethod[PaymentMethod.CARTAO])}`,
+      `Dinheiro: ${formatCurrencyBRL(summary.byMethod[PaymentMethod.DINHEIRO])}`,
+      `Transferência: ${formatCurrencyBRL(summary.byMethod[PaymentMethod.TRANSFERENCIA])}`,
+    ].join('   |   ');
+    doc.text(paymentSummaryText, marginX + 3, methodY + 5.8);
+
+    const tableRows = filteredRecords.map((rec) => {
+      const lodging = rec.lodgingTotal ?? rec.nights * rec.dailyRate;
+      const guestLines = [
+        `${rec.guestName}${rec.guestCount ? ` (${rec.guestCount} hósp.)` : ''}`,
+        ...(rec.checkIn || rec.checkOut
+          ? [`${formatDateShortBR(rec.checkIn)} a ${formatDateShortBR(rec.checkOut)}`]
+          : []),
+        ...(rec.notes ? [`Obs.: ${rec.notes}`] : []),
+      ];
+
+      return [
+        formatDateTimeBR(rec.closedAt),
+        `${rec.chaletLabel}\n${rec.category}`,
+        guestLines.join('\n'),
+        `${formatCurrencyBRL(lodging)}\n(${rec.nights}x ${formatCurrencyBRL(rec.dailyRate)})`,
+        rec.extrasNote
+          ? `${formatCurrencyBRL(rec.extrasAmount)}\n${rec.extrasNote}`
+          : formatCurrencyBRL(rec.extrasAmount),
+        formatCurrencyBRL(rec.paidBefore),
+        `${formatCurrencyBRL(rec.finalCharged)}\n(${rec.paymentMethod})`,
+        formatCurrencyBRL(rec.totalAmount),
+      ];
+    });
+
+    autoTable(doc, {
+      startY: methodY + 13,
+      margin: { left: marginX, right: marginX, bottom: 16 },
+      head: [
+        [
+          'Fechamento',
+          'Acomodação',
+          'Hóspede / Período / Obs.',
+          'Hospedagem',
+          'Consumo / Extras',
+          'Sinal pago',
+          'Check-out',
+          'Total conta',
+        ],
+      ],
+      body: tableRows,
+      foot: [
+        [
+          'TOTAL GERAL',
+          `${summary.count} ${summary.count === 1 ? 'conta' : 'contas'}`,
+          `${summary.nights} ${summary.nights === 1 ? 'diária' : 'diárias'}`,
+          formatCurrencyBRL(summary.lodging),
+          formatCurrencyBRL(summary.extras),
+          formatCurrencyBRL(summary.paidBefore),
+          formatCurrencyBRL(summary.finalCharged),
+          formatCurrencyBRL(summary.total),
+        ],
+      ],
+      theme: 'grid',
+      styles: {
+        font: 'helvetica',
+        fontSize: 8,
+        cellPadding: 2.5,
+        textColor: [30, 41, 59],
+        lineColor: [226, 232, 240],
+        lineWidth: 0.2,
+        valign: 'top',
+      },
+      headStyles: {
+        fillColor: [15, 23, 42],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        halign: 'left',
+      },
+      footStyles: {
+        fillColor: [241, 245, 249],
+        textColor: [15, 23, 42],
+        fontStyle: 'bold',
+      },
+      alternateRowStyles: {
+        fillColor: [248, 250, 252],
+      },
+      columnStyles: {
+        0: { cellWidth: 27 },
+        1: { cellWidth: 28 },
+        2: { cellWidth: 70 },
+        3: { cellWidth: 32, halign: 'right' },
+        4: { cellWidth: 34, halign: 'right' },
+        5: { cellWidth: 24, halign: 'right' },
+        6: { cellWidth: 28, halign: 'right' },
+        7: { cellWidth: 26, halign: 'right', fontStyle: 'bold' },
+      },
+      didParseCell: (data) => {
+        if (data.section === 'head' || data.section === 'foot') {
+          if (data.column.index >= 3) {
+            data.cell.styles.halign = 'right';
+          }
+        }
+      },
+    });
+
+    const totalPages = doc.getNumberOfPages();
+    for (let page = 1; page <= totalPages; page++) {
+      doc.setPage(page);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(100, 116, 139);
+      doc.text('Pousada Vale do Ermitão — Conferência financeira', marginX, pageHeight - 7);
+      doc.text(
+        `Página ${page} de ${totalPages}`,
+        pageWidth - marginX,
+        pageHeight - 7,
+        { align: 'right' },
+      );
+    }
+
+    doc.save(`relatorio-fechamento-pve-${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
   const handlePrint = () => {
@@ -313,31 +414,12 @@ export function AccountReportModal({
           <div className="flex flex-wrap items-center gap-2 print:hidden">
             <button
               type="button"
-              onClick={handleCopyFullReport}
-              disabled={filteredRecords.length === 0}
-              className="inline-flex items-center gap-1.5 h-9 px-3 text-xs font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap"
-            >
-              {copiedReport ? (
-                <>
-                  <Check className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
-                  <span>Relatório copiado</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>Copiar relatório</span>
-                </>
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={handleExportCsv}
+              onClick={handleDownloadPdf}
               disabled={filteredRecords.length === 0}
               className="inline-flex items-center gap-1.5 h-9 px-3 text-xs font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap"
             >
-              <Download className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>Exportar CSV</span>
+              <FileDown className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>Baixar PDF</span>
             </button>
 
             <button
@@ -613,20 +695,6 @@ export function AccountReportModal({
                         </td>
                         <td className="py-3 px-3 text-right align-top whitespace-nowrap print:hidden">
                           <div className="inline-flex items-center justify-end gap-1">
-                            <button
-                              type="button"
-                              onClick={() => handleCopySingleReceipt(rec)}
-                              title="Copiar comprovante"
-                              className="inline-flex items-center gap-1 px-2 py-1 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
-                            >
-                              {copiedRowId === rec.id ? (
-                                <Check className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" />
-                              ) : (
-                                <Copy className="h-3.5 w-3.5" />
-                              )}
-                              <span>{copiedRowId === rec.id ? 'Copiado' : 'Recibo'}</span>
-                            </button>
-
                             {confirmDeleteId === rec.id ? (
                               <button
                                 type="button"

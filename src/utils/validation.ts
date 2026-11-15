@@ -224,3 +224,66 @@ export function validateStayDates(checkIn?: string, checkOut?: string): Validati
   }
   return { valid: true };
 }
+
+export function getLocalTodayYMD(reference: Date = new Date()): string {
+  const year = reference.getFullYear();
+  const month = String(reference.getMonth() + 1).padStart(2, '0');
+  const day = String(reference.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export function addDaysYMD(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  if (!y || !m || !d) return ymd;
+  const date = new Date(y, m - 1, d + days, 12, 0, 0);
+  return getLocalTodayYMD(date);
+}
+
+export function datesOverlap(
+  startA?: string,
+  endA?: string,
+  startB?: string,
+  endB?: string,
+): boolean {
+  if (!startA || !endA || !startB || !endB) return false;
+  return startA < endB && startB < endA;
+}
+
+export function validateFutureReservationDates(
+  checkIn?: string,
+  checkOut?: string,
+  referenceTodayYMD?: string,
+): ValidationResult {
+  if (!checkIn) {
+    return { valid: false, message: 'Informe a data prevista de check-in.' };
+  }
+  if (!checkOut) {
+    return { valid: false, message: 'Informe a data prevista de check-out.' };
+  }
+
+  const todayYMD = referenceTodayYMD || getLocalTodayYMD();
+  if (checkIn < todayYMD) {
+    return {
+      valid: false,
+      message: 'A data de check-in não pode estar no passado.',
+    };
+  }
+  if (checkOut <= checkIn) {
+    return {
+      valid: false,
+      message: 'Check-out deve ser pelo menos 1 dia após o check-in.',
+    };
+  }
+
+  const start = new Date(`${checkIn}T12:00:00`);
+  const end = new Date(`${checkOut}T12:00:00`);
+  const nights = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+
+  return {
+    valid: true,
+    message:
+      checkIn === todayYMD
+        ? `${nights} ${nights === 1 ? 'diária' : 'diárias'} · check-in hoje`
+        : `${nights} ${nights === 1 ? 'diária' : 'diárias'} · reserva futura`,
+  };
+}
