@@ -1,0 +1,6 @@
+{
+  "name": "Pousada Vale do Ermitão — Painel de Chalés",
+  "description": "Sistema simples e minimalista para controle de ocupação das 19 acomodações da Pousada Vale do Ermitão.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
